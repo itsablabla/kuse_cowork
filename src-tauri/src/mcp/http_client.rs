@@ -8,11 +8,12 @@ pub struct HttpMcpClient {
     base_url: String,
     session_id: Option<String>,
     oauth_token: Option<String>,
+    custom_headers: Option<std::collections::HashMap<String, String>>,
     message_id: std::sync::atomic::AtomicU64,
 }
 
 impl HttpMcpClient {
-    pub fn new(server_url: String, oauth_token: Option<String>) -> Self {
+    pub fn new(server_url: String, oauth_token: Option<String>, custom_headers: Option<std::collections::HashMap<String, String>>) -> Self {
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
@@ -32,12 +33,31 @@ impl HttpMcpClient {
             base_url,
             session_id: None,
             oauth_token,
+            custom_headers,
             message_id: std::sync::atomic::AtomicU64::new(1),
         }
     }
 
     fn next_message_id(&self) -> u64 {
         self.message_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn apply_auth_headers(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        // Add session ID if we have one
+        if let Some(ref session_id) = self.session_id {
+            request = request.header("Mcp-Session-Id", session_id);
+        }
+        // Add OAuth token if configured
+        if let Some(ref token) = self.oauth_token {
+            request = request.header("Authorization", format!("Bearer {}", token));
+        }
+        // Add custom headers if configured
+        if let Some(ref headers) = self.custom_headers {
+            for (key, value) in headers {
+                request = request.header(key.as_str(), value.as_str());
+            }
+        }
+        request
     }
 
     pub async fn initialize(&mut self) -> Result<Value, Box<dyn std::error::Error + Send + Sync>> {
@@ -58,15 +78,12 @@ impl HttpMcpClient {
             }
         });
 
-        let mut request = self.client.post(&self.base_url)
+        let request = self.client.post(&self.base_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json")
             .json(&request_body);
 
-        // Add OAuth token if configured
-        if let Some(ref token) = self.oauth_token {
-            request = request.header("Authorization", format!("Bearer {}", token));
-        }
+        let request = self.apply_auth_headers(request);
 
         let response = request.send().await?;
 
@@ -90,18 +107,10 @@ impl HttpMcpClient {
             "params": {}
         });
 
-        let mut request = self.client.post(&self.base_url)
+        let request = self.client.post(&self.base_url)
             .header("Content-Type", "application/json");
 
-        // Add session ID if we have one
-        if let Some(ref session_id) = self.session_id {
-            request = request.header("Mcp-Session-Id", session_id);
-        }
-
-        // Add OAuth token if configured
-        if let Some(ref token) = self.oauth_token {
-            request = request.header("Authorization", format!("Bearer {}", token));
-        }
+        let request = self.apply_auth_headers(request);
 
         let response = request.json(&request_body).send().await?;
 
@@ -122,19 +131,11 @@ impl HttpMcpClient {
             "params": {}
         });
 
-        let mut request = self.client.post(&self.base_url)
+        let request = self.client.post(&self.base_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json");
 
-        // Add session ID if we have one
-        if let Some(ref session_id) = self.session_id {
-            request = request.header("Mcp-Session-Id", session_id);
-        }
-
-        // Add OAuth token if configured
-        if let Some(ref token) = self.oauth_token {
-            request = request.header("Authorization", format!("Bearer {}", token));
-        }
+        let request = self.apply_auth_headers(request);
 
         let response = request.json(&request_body).send().await?;
         let response_body: Value = response.json().await?;
@@ -155,19 +156,11 @@ impl HttpMcpClient {
             }
         });
 
-        let mut request = self.client.post(&self.base_url)
+        let request = self.client.post(&self.base_url)
             .header("Content-Type", "application/json")
             .header("Accept", "application/json");
 
-        // Add session ID if we have one
-        if let Some(ref session_id) = self.session_id {
-            request = request.header("Mcp-Session-Id", session_id);
-        }
-
-        // Add OAuth token if configured
-        if let Some(ref token) = self.oauth_token {
-            request = request.header("Authorization", format!("Bearer {}", token));
-        }
+        let request = self.apply_auth_headers(request);
 
         let response = request.json(&request_body).send().await?;
         let response_body: Value = response.json().await?;
