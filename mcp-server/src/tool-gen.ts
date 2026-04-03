@@ -69,6 +69,8 @@ export interface ToolDef {
     queryParams: string[];
     hasBody: boolean;
     tags: string[];
+    /** Maps renamed body keys (with body_ prefix) back to original names */
+    renamedBodyKeys: Record<string, string>;
   };
 }
 
@@ -129,15 +131,20 @@ function resolveSchema(schema: JSONSchema, components: Record<string, JSONSchema
     return merged;
   }
   if (schema.anyOf) {
-    // Pick the first non-null variant
+    // Pick the first non-null variant; prefer string for flexibility
+    let bestMatch: JSONSchema | undefined;
     for (const sub of schema.anyOf) {
-      if (sub.type !== "null" && sub.type !== undefined) {
-        return resolveSchema(sub, components, depth + 1);
+      if (sub.type === "null" || (sub.type === undefined && !sub.$ref)) continue;
+      const resolved = resolveSchema(sub, components, depth + 1);
+      if (!bestMatch) {
+        bestMatch = resolved;
       }
-      if (sub.$ref) {
-        return resolveSchema(sub, components, depth + 1);
+      // Prefer string type for union types (more permissive for MCP tools)
+      if (resolved.type === "string") {
+        return resolved;
       }
     }
+    if (bestMatch) return bestMatch;
   }
   // Resolve nested properties
   if (schema.properties) {
@@ -154,8 +161,11 @@ function resolveSchema(schema: JSONSchema, components: Record<string, JSONSchema
 }
 
 /** Map an OpenAPI type to a simple JSON-Schema type string. */
-function paramTypeToSchema(param: OpenAPIParameter): JSONSchema {
-  const s = param.schema ?? {};
+function paramTypeToSchema(param: OpenAPIParameter, components: Record<string, JSONSchema>): JSONSchema {
+  let s = param.schema ?? {};
+  if (s.$ref) {
+    s = resolveRef(s.$ref, components);
+  }
   return {
     type: s.type ?? "string",
     description: param.description ?? undefined,
@@ -193,14 +203,16 @@ export function generateTools(spec: OpenAPISpec): ToolDef[] {
       const pathParams: string[] = [];
       const queryParams: string[] = [];
 
+      const renamedBodyKeys: Record<string, string> = {};
+
       for (const param of op.parameters ?? []) {
         if (param.in === "path") {
           pathParams.push(param.name);
-          properties[param.name] = paramTypeToSchema(param);
+          properties[param.name] = paramTypeToSchema(param, components);
           required.push(param.name); // path params always required
         } else if (param.in === "query") {
           queryParams.push(param.name);
-          properties[param.name] = paramTypeToSchema(param);
+          properties[param.name] = paramTypeToSchema(param, components);
           if (param.required) required.push(param.name);
         }
       }
@@ -218,6 +230,9 @@ export function generateTools(spec: OpenAPISpec): ToolDef[] {
             for (const [k, v] of Object.entries(resolved.properties)) {
               // Prefix with body_ if it collides with a param name
               const key = properties[k] ? `body_${k}` : k;
+              if (key !== k) {
+                renamedBodyKeys[key] = k;
+              }
               properties[key] = resolveSchema(v, components);
             }
             if (resolved.required) {
@@ -264,6 +279,7 @@ export function generateTools(spec: OpenAPISpec): ToolDef[] {
           queryParams,
           hasBody,
           tags: op.tags ?? [],
+          renamedBodyKeys,
         },
       });
     }
@@ -284,7 +300,7 @@ export async function executeTool(
   tool: ToolDef,
   args: Record<string, unknown>,
 ): Promise<{ content: Array<{ type: "text"; text: string }> }> {
-  const { method, pathTemplate, pathParams, queryParams, hasBody } = tool._meta;
+  const { method, pathTemplate, pathParams, queryParams, hasBody, renamedBodyKeys } = tool._meta;
 
   // Substitute path parameters
   let resolvedPath = pathTemplate;
@@ -317,8 +333,8 @@ export async function executeTool(
       const bodyObj: Record<string, unknown> = {};
       for (const [k, v] of Object.entries(args)) {
         if (!reserved.has(k) && v !== undefined && v !== null) {
-          // Remove body_ prefix if added during generation
-          const originalKey = k.startsWith("body_") ? k.slice(5) : k;
+          // Reverse any collision-based renaming from generation
+          const originalKey = renamedBodyKeys[k] ?? k;
           bodyObj[originalKey] = v;
         }
       }
