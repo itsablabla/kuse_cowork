@@ -249,16 +249,13 @@ export function generateTools(spec: OpenAPISpec): ToolDef[] {
             };
           }
         }
-        // Handle multipart (file upload) — accept file_path
+        // Handle multipart (file upload) — skip these as MCP tools since
+        // executeTool always sends JSON. Multipart endpoints would always fail.
+        // TODO: Add FormData support to KuseClient if file upload tools are needed.
         const multipartSchema = bodyContent["multipart/form-data"]?.schema;
         if (multipartSchema && !jsonSchema) {
-          hasBody = true;
-          const resolved = resolveSchema(multipartSchema, components);
-          if (resolved.properties) {
-            for (const [k, v] of Object.entries(resolved.properties)) {
-              properties[k] = resolveSchema(v, components);
-            }
-          }
+          // Mark description so users know this endpoint exists but isn't callable
+          // Don't set hasBody — tool will be registered but won't send a body
         }
       }
 

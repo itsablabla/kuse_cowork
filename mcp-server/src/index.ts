@@ -88,6 +88,24 @@ async function startHttp(): Promise<void> {
 
   // Track transports by session ID for stateful connections
   const transports = new Map<string, StreamableHTTPServerTransport>();
+  const sessionLastActivity = new Map<string, number>();
+
+  // Periodic cleanup of stale sessions (every 60s, evict after 30min idle)
+  const SESSION_TTL_MS = 30 * 60 * 1000;
+  const cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [sid, lastActive] of sessionLastActivity) {
+      if (now - lastActive > SESSION_TTL_MS) {
+        const transport = transports.get(sid);
+        if (transport) {
+          transport.close().catch(() => {});
+        }
+        transports.delete(sid);
+        sessionLastActivity.delete(sid);
+      }
+    }
+  }, 60_000);
+  cleanupInterval.unref();
 
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     try {
@@ -168,8 +186,10 @@ async function startHttp(): Promise<void> {
           const sid = transport.sessionId;
           if (sid) {
             transports.set(sid, transport);
+            sessionLastActivity.set(sid, Date.now());
             transport.onclose = () => {
               transports.delete(sid);
+              sessionLastActivity.delete(sid);
             };
           }
           return;
@@ -177,6 +197,7 @@ async function startHttp(): Promise<void> {
 
         // Existing session
         if (sessionId && transports.has(sessionId)) {
+          sessionLastActivity.set(sessionId, Date.now());
           const transport = transports.get(sessionId)!;
           await transport.handleRequest(req, res, body);
           return;
@@ -190,6 +211,7 @@ async function startHttp(): Promise<void> {
       if (req.method === "GET") {
         // SSE stream for server-initiated messages
         if (sessionId && transports.has(sessionId)) {
+          sessionLastActivity.set(sessionId, Date.now());
           const transport = transports.get(sessionId)!;
           await transport.handleRequest(req, res);
           return;
@@ -205,6 +227,7 @@ async function startHttp(): Promise<void> {
           const transport = transports.get(sessionId)!;
           await transport.handleRequest(req, res);
           transports.delete(sessionId);
+          sessionLastActivity.delete(sessionId);
           return;
         }
         res.writeHead(404, { "Content-Type": "application/json" });
