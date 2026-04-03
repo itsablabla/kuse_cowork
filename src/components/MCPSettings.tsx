@@ -107,6 +107,9 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
     try {
       const parsed = JSON.parse(headersStr);
       if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        for (const value of Object.values(parsed)) {
+          if (typeof value !== "string") return undefined;
+        }
         return parsed;
       }
       return undefined;
