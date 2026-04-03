@@ -53,11 +53,17 @@ impl HttpMcpClient {
         }
         // Add custom headers if configured, skipping reserved headers
         if let Some(ref headers) = self.custom_headers {
-            let reserved = ["authorization", "mcp-session-id", "content-type", "accept"];
+            let reserved_always = ["mcp-session-id", "content-type", "accept"];
             for (key, value) in headers {
-                if !reserved.contains(&key.to_lowercase().as_str()) {
-                    request = request.header(key.as_str(), value.as_str());
+                let lower = key.to_lowercase();
+                if reserved_always.contains(&lower.as_str()) {
+                    continue;
                 }
+                // Only block Authorization from custom headers when OAuth token is active
+                if lower == "authorization" && self.oauth_token.is_some() {
+                    continue;
+                }
+                request = request.header(key.as_str(), value.as_str());
             }
         }
         request
