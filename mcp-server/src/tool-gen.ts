@@ -314,11 +314,15 @@ export async function executeTool(
     resolvedPath = resolvedPath.replace(`{${p}}`, encodeURIComponent(String(val)));
   }
 
-  // Collect query params
-  const query: Record<string, string> = {};
+  // Collect query params (arrays are passed through for repeated key serialization)
+  const query: Record<string, string | string[]> = {};
   for (const q of queryParams) {
     if (args[q] !== undefined && args[q] !== null) {
-      query[q] = String(args[q]);
+      if (Array.isArray(args[q])) {
+        query[q] = (args[q] as unknown[]).map(String);
+      } else {
+        query[q] = String(args[q]);
+      }
     }
   }
 

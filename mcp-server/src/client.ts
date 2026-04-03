@@ -30,7 +30,7 @@ export class KuseClient {
     method: string,
     path: string,
     options: {
-      query?: Record<string, string>;
+      query?: Record<string, string | string[]>;
       body?: unknown;
       headers?: Record<string, string>;
     } = {},
@@ -38,7 +38,12 @@ export class KuseClient {
     const url = new URL(`${this.baseUrl}${path}`);
     if (options.query) {
       for (const [k, v] of Object.entries(options.query)) {
-        if (v !== undefined && v !== null && v !== "") {
+        if (v === undefined || v === null || v === "") continue;
+        if (Array.isArray(v)) {
+          for (const item of v) {
+            url.searchParams.append(k, item);
+          }
+        } else {
           url.searchParams.set(k, v);
         }
       }
