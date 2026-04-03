@@ -47,14 +47,17 @@ impl HttpMcpClient {
         if let Some(ref session_id) = self.session_id {
             request = request.header("Mcp-Session-Id", session_id);
         }
-        // Add OAuth token if configured
+        // Add OAuth token if configured (token already includes "Bearer " prefix from OAuth flow)
         if let Some(ref token) = self.oauth_token {
-            request = request.header("Authorization", format!("Bearer {}", token));
+            request = request.header("Authorization", token.as_str());
         }
-        // Add custom headers if configured
+        // Add custom headers if configured, skipping reserved headers
         if let Some(ref headers) = self.custom_headers {
+            let reserved = ["authorization", "mcp-session-id", "content-type", "accept"];
             for (key, value) in headers {
-                request = request.header(key.as_str(), value.as_str());
+                if !reserved.contains(&key.to_lowercase().as_str()) {
+                    request = request.header(key.as_str(), value.as_str());
+                }
             }
         }
         request
