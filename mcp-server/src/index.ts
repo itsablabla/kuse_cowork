@@ -43,9 +43,13 @@ const openApiSpec: OpenAPISpec = require("./openapi.json");
 /*  Bootstrap                                                          */
 /* ------------------------------------------------------------------ */
 
-const client = new KuseClient({
-  apiBaseUrl: process.env["KUSE_API_BASE_URL"],
-  accessToken: process.env["KUSE_ACCESS_TOKEN"],
+const apiBaseUrl = process.env["KUSE_API_BASE_URL"];
+const defaultAccessToken = process.env["KUSE_ACCESS_TOKEN"];
+
+// Singleton client for stdio mode (single session)
+const stdioClient = new KuseClient({
+  apiBaseUrl: apiBaseUrl,
+  accessToken: defaultAccessToken,
 });
 
 const allTools = generateTools(openApiSpec);
@@ -86,6 +90,7 @@ async function startHttp(): Promise<void> {
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
+    try {
     // CORS headers for browser-based clients
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
@@ -120,12 +125,19 @@ async function startHttp(): Promise<void> {
         for await (const chunk of req) {
           chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
         }
-        const body = JSON.parse(Buffer.concat(chunks).toString());
+        let body: unknown;
+        try {
+          body = JSON.parse(Buffer.concat(chunks).toString());
+        } catch {
+          res.writeHead(400, { "Content-Type": "application/json" });
+          res.end(JSON.stringify({ error: "Invalid JSON in request body" }));
+          return;
+        }
 
         // Check if this is an initialization request
         const isInit = Array.isArray(body)
-          ? body.some((m: { method?: string }) => m.method === "initialize")
-          : body.method === "initialize";
+          ? body.some((m: { method?: string }) => (m as { method?: string }).method === "initialize")
+          : (body as { method?: string }).method === "initialize";
 
         if (isInit) {
           // Create a new transport + server for this session
@@ -138,8 +150,14 @@ async function startHttp(): Promise<void> {
             version: "1.0.0",
           });
 
-          // Register all tools on this session server
-          registerTools(sessionServer);
+          // Each HTTP session gets its own KuseClient to isolate auth tokens
+          const sessionClient = new KuseClient({
+            apiBaseUrl: apiBaseUrl,
+            accessToken: defaultAccessToken,
+          });
+
+          // Register all tools on this session server with its own client
+          registerTools(sessionServer, sessionClient);
 
           await sessionServer.connect(transport);
 
@@ -197,6 +215,13 @@ async function startHttp(): Promise<void> {
 
     res.writeHead(404, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ error: "Not found" }));
+    } catch (err) {
+      console.error("HTTP handler error:", err);
+      if (!res.headersSent) {
+        res.writeHead(500, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Internal server error" }));
+      }
+    }
   });
 
   httpServer.listen(port, () => {
@@ -210,7 +235,7 @@ async function startHttp(): Promise<void> {
  * Register all tools (meta + API) on a given McpServer instance.
  * Used by HTTP transport to create per-session servers.
  */
-function registerTools(srv: McpServer): void {
+function registerTools(srv: McpServer, kuseClient: KuseClient): void {
   // Meta tool: list tools
   srv.tool(
     "kuse_list_tools",
@@ -240,14 +265,14 @@ function registerTools(srv: McpServer): void {
     { email: z.string().describe("Kuse account email"), password: z.string().describe("Kuse account password") },
     async ({ email, password }) => {
       try {
-        const result = await client.login(email, password);
+        const result = await kuseClient.login(email, password);
         const data = result.data as Record<string, unknown>;
         const token =
           (data?.["access_token"] as string) ??
           (data?.["token"] as string) ??
           (data?.["data"] as Record<string, unknown>)?.["access_token"];
         if (token && typeof token === "string") {
-          client.setAccessToken(token);
+          kuseClient.setAccessToken(token);
           return { content: [{ type: "text" as const, text: `Authenticated successfully.\nResponse: ${JSON.stringify(data, null, 2)}` }] };
         }
         return { content: [{ type: "text" as const, text: `Login response (HTTP ${result.status}):\n${JSON.stringify(result.data, null, 2)}` }] };
@@ -264,7 +289,7 @@ function registerTools(srv: McpServer): void {
     "Manually set the Bearer access token for authenticated Kuse API requests.",
     { token: z.string().describe("Bearer access token") },
     async ({ token }) => {
-      client.setAccessToken(token);
+      kuseClient.setAccessToken(token);
       return { content: [{ type: "text" as const, text: "Access token updated for this session." }] };
     },
   );
@@ -314,7 +339,7 @@ function registerTools(srv: McpServer): void {
       tool.description,
       shape,
       async (args: Record<string, unknown>) => {
-        return executeTool(client, tool, args);
+        return executeTool(kuseClient, tool, args);
       },
     );
   }
@@ -325,7 +350,7 @@ async function main(): Promise<void> {
     await startHttp();
   } else {
     // Register tools on the default server for stdio mode
-    registerTools(server);
+    registerTools(server, stdioClient);
     await startStdio();
   }
 }
