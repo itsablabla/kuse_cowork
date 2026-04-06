@@ -27,6 +27,8 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { randomUUID } from "node:crypto";
 
 import { KuseClient } from "./client.js";
+import { BlinkoClient } from "./blinko-client.js";
+import { syncKuseToBlinko } from "./blinko-sync.js";
 import {
   generateTools,
   executeTool,
@@ -255,7 +257,7 @@ async function startHttp(): Promise<void> {
 }
 
 /**
- * Register all tools (meta + API) on a given McpServer instance.
+ * Register all tools (meta + API + Blinko) on a given McpServer instance.
  * Used by HTTP transport to create per-session servers.
  */
 function registerTools(srv: McpServer, kuseClient: KuseClient): void {
@@ -314,6 +316,100 @@ function registerTools(srv: McpServer, kuseClient: KuseClient): void {
     async ({ token }) => {
       kuseClient.setAccessToken(token);
       return { content: [{ type: "text" as const, text: "Access token updated for this session." }] };
+    },
+  );
+
+  // ---- Blinko integration tools ----
+
+  // Tool: Save a note to Blinko
+  srv.tool(
+    "blinko_save_note",
+    "Save a note to Blinko (jadennotes.pikapod.net). Use tags with # prefix in content for organization. type: 0=quick note, 1=note, 2=todo.",
+    {
+      content: z.string().describe("Markdown content for the note (supports #tags in content)"),
+      type: z.number().optional().describe("Note type: 0=quick/blinko, 1=note (default), 2=todo"),
+      blinko_url: z.string().optional().describe("Blinko instance URL (default: https://jadennotes.pikapod.net)"),
+      blinko_token: z.string().optional().describe("Blinko Bearer token (default: uses BLINKO_TOKEN env var)"),
+    },
+    async ({ content, type, blinko_url, blinko_token }) => {
+      const url = blinko_url ?? process.env["BLINKO_URL"] ?? "https://jadennotes.pikapod.net";
+      const token = blinko_token ?? process.env["BLINKO_TOKEN"] ?? "";
+      if (!token) {
+        return { content: [{ type: "text" as const, text: "Error: No Blinko token provided. Set BLINKO_TOKEN env var or pass blinko_token parameter." }] };
+      }
+      try {
+        const blinko = new BlinkoClient({ baseUrl: url, token });
+        const note = await blinko.upsertNote(content, type ?? 1);
+        return { content: [{ type: "text" as const, text: `Note saved to Blinko (ID: ${note.id}, ${content.length} chars).\n${JSON.stringify(note, null, 2)}` }] };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Blinko save error: ${message}` }] };
+      }
+    },
+  );
+
+  // Tool: List notes from Blinko
+  srv.tool(
+    "blinko_list_notes",
+    "List notes from Blinko. Supports search and pagination.",
+    {
+      search: z.string().optional().describe("Search text to filter notes"),
+      page: z.number().optional().describe("Page number (default: 1)"),
+      size: z.number().optional().describe("Page size (default: 30)"),
+      type: z.number().optional().describe("Filter by type: -1=all (default), 0=quick, 1=note, 2=todo"),
+      blinko_url: z.string().optional().describe("Blinko instance URL"),
+      blinko_token: z.string().optional().describe("Blinko Bearer token"),
+    },
+    async ({ search, page, size, type, blinko_url, blinko_token }) => {
+      const url = blinko_url ?? process.env["BLINKO_URL"] ?? "https://jadennotes.pikapod.net";
+      const token = blinko_token ?? process.env["BLINKO_TOKEN"] ?? "";
+      if (!token) {
+        return { content: [{ type: "text" as const, text: "Error: No Blinko token provided." }] };
+      }
+      try {
+        const blinko = new BlinkoClient({ baseUrl: url, token });
+        const result = await blinko.listNotes({ page, size, searchText: search, type });
+        return { content: [{ type: "text" as const, text: JSON.stringify(result, null, 2) }] };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Blinko list error: ${message}` }] };
+      }
+    },
+  );
+
+  // Tool: Full sync of all Kuse data to Blinko
+  srv.tool(
+    "kuse_sync_to_blinko",
+    "Pull ALL Kuse account data (profile, subscription, credits, boards, projects, spaces, agents, etc.) and save each category as an organized, tagged note in Blinko. Use this to create a full backup/snapshot of your Kuse data.",
+    {
+      blinko_url: z.string().optional().describe("Blinko instance URL (default: https://jadennotes.pikapod.net)"),
+      blinko_token: z.string().optional().describe("Blinko Bearer token (default: uses BLINKO_TOKEN env var)"),
+    },
+    async ({ blinko_url, blinko_token }) => {
+      const url = blinko_url ?? process.env["BLINKO_URL"] ?? "https://jadennotes.pikapod.net";
+      const token = blinko_token ?? process.env["BLINKO_TOKEN"] ?? "";
+      if (!token) {
+        return { content: [{ type: "text" as const, text: "Error: No Blinko token provided. Set BLINKO_TOKEN env var or pass blinko_token parameter." }] };
+      }
+      try {
+        const blinko = new BlinkoClient({ baseUrl: url, token });
+        const result = await syncKuseToBlinko(kuseClient, blinko);
+        const summary = [
+          `Kuse → Blinko sync complete!`,
+          `Saved: ${result.saved} notes`,
+          `Errors: ${result.errors.length}`,
+          "",
+          "Notes saved:",
+          ...result.notes.map((n) => `  - ${n.category}: note #${n.noteId} (${n.chars} chars)`),
+        ];
+        if (result.errors.length > 0) {
+          summary.push("", "Errors:", ...result.errors.map((e) => `  - ${e}`));
+        }
+        return { content: [{ type: "text" as const, text: summary.join("\n") }] };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { content: [{ type: "text" as const, text: `Sync error: ${message}` }] };
+      }
     },
   );
 
