@@ -29,7 +29,8 @@ async function safeCall(
   opts?: { query?: Record<string, string | string[]>; body?: unknown },
 ): Promise<unknown | null> {
   try {
-    const { data } = await client.request(method, path, opts);
+    const { status, data } = await client.request(method, path, opts);
+    if (status < 200 || status >= 300) return null;
     return data;
   } catch {
     return null;
@@ -178,7 +179,7 @@ export async function syncKuseToBlinko(
   }
 
   // 11. Favorites
-  const favorites = await safeCall(kuse, "GET", "/api/dashboard/favorite_boards");
+  const favorites = await safeCall(kuse, "GET", "/api/dashboard/favorite-boards");
   if (favorites) {
     await save(
       "Favorites",
@@ -196,7 +197,7 @@ export async function syncKuseToBlinko(
   }
 
   // 13. Recycle Bin
-  const recycle = await safeCall(kuse, "GET", "/api/dashboard/recycle_bin");
+  const recycle = await safeCall(kuse, "GET", "/api/dashboard/recycle-bin");
   if (recycle) {
     await save(
       "Recycle Bin",
@@ -283,7 +284,7 @@ export async function syncKuseToBlinko(
   }
 
   // 22. Dispute Status
-  const dispute = await safeCall(kuse, "GET", "/api/credits/dispute_status");
+  const dispute = await safeCall(kuse, "GET", "/api/credits/dispute/status");
   if (dispute) {
     await save(
       "Dispute Status",

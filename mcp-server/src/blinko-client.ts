@@ -44,6 +44,10 @@ export class BlinkoClient {
       headers: this.headers,
       body: JSON.stringify(body),
     });
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      throw new Error(`Blinko API error (${resp.status}): ${errorText}`);
+    }
     return (await resp.json()) as { id: number; content: string };
   }
 
