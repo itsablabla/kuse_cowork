@@ -255,7 +255,7 @@ export async function syncKuseToBlinko(
   }
 
   // 19. Promo & Invite Codes
-  const promo = await safeCall(kuse, "GET", "/api/promo/my_code");
+  const promo = await safeCall(kuse, "GET", "/api/promo/my-code");
   const inviteStatus = await safeCall(kuse, "GET", "/api/users/invite_code_status");
   if (promo || inviteStatus) {
     await save(
@@ -275,7 +275,7 @@ export async function syncKuseToBlinko(
   }
 
   // 21. Migration Tasks
-  const migration = await safeCall(kuse, "GET", "/api/board_migration/tasks");
+  const migration = await safeCall(kuse, "GET", "/api/board-migration/tasks");
   if (migration) {
     await save(
       "Migration Tasks",
