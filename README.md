@@ -14,7 +14,7 @@
 </div>
 
 
-# Kuse Cowork：An Open-Source, Model-Agnostic [Alternative to Claude Cowork](https://www.claude-cowork.ai/)
+# Kuse Cowork：An Open-Source, Model-Agnostic [Alternative to Claude Cowork](https://www.kuse.ai/open-cowork/features)
 >Kuse Cowork is a lightweight, open-source desktop cowork agent built for people who want local-first execution, full model freedom, and real privacy control.
 
 **Works with any models, BYOK, written in Rust** 🚀

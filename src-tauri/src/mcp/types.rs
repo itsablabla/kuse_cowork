@@ -7,6 +7,8 @@ pub struct MCPServerConfig {
     pub server_url: String,
     pub oauth_client_id: Option<String>,
     pub oauth_client_secret: Option<String>,
+    #[serde(default)]
+    pub custom_headers: Option<std::collections::HashMap<String, String>>,
     pub enabled: bool,
     pub created_at: String,
     pub updated_at: String,

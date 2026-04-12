@@ -1,4 +1,4 @@
-import { Component, For, createSignal, onMount, createMemo } from "solid-js";
+import { Component, For, createSignal, onMount, createMemo, Show } from "solid-js";
 import {
   MCPServerConfig,
   MCPServerStatus,
@@ -9,11 +9,22 @@ import {
   disconnectMCPServer,
   getMCPServerStatuses
 } from "../lib/mcp-api";
+import { isTauri } from "../lib/tauri-api";
 import "./MCPSettings.css";
 
 interface MCPSettingsProps {
   onClose: () => void;
 }
+
+// Pre-configured MCP server templates
+const PRESET_SERVERS = [
+  {
+    name: "composio",
+    server_url: "https://connect.composio.dev/mcp",
+    custom_headers: { "x-consumer-api-key": "ck_5BPjQp-eNXt3v1ktnhuZ" },
+    description: "Composio MCP - Connect 250+ apps & tools to your AI agent",
+  },
+];
 
 const MCPSettings: Component<MCPSettingsProps> = (props) => {
   const [servers, setServers] = createSignal<MCPServerConfig[]>([]);
@@ -28,6 +39,7 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
     serverUrl: "",
     oauthClientId: "",
     oauthClientSecret: "",
+    customHeaders: "" as string, // JSON string of key-value pairs
   });
 
   const mergedData = createMemo(() => {
@@ -36,6 +48,12 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
       server,
       status: statusMap.get(server.id)
     }));
+  });
+
+  // Check which presets are already added
+  const availablePresets = createMemo(() => {
+    const existing = servers().map(s => s.name.toLowerCase());
+    return PRESET_SERVERS.filter(p => !existing.includes(p.name.toLowerCase()));
   });
 
   onMount(async () => {
@@ -64,6 +82,7 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
       serverUrl: "",
       oauthClientId: "",
       oauthClientSecret: "",
+      customHeaders: "",
     });
     setEditingServer(null);
     setShowAddForm(false);
@@ -75,9 +94,28 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
       serverUrl: server.server_url || "",
       oauthClientId: server.oauth_client_id || "",
       oauthClientSecret: server.oauth_client_secret || "",
+      customHeaders: server.custom_headers
+        ? JSON.stringify(server.custom_headers, null, 2)
+        : "",
     });
     setEditingServer(server);
     setShowAddForm(true);
+  };
+
+  const parseCustomHeaders = (headersStr: string): Record<string, string> | undefined => {
+    if (!headersStr.trim()) return undefined;
+    try {
+      const parsed = JSON.parse(headersStr);
+      if (typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)) {
+        for (const value of Object.values(parsed)) {
+          if (typeof value !== "string") return undefined;
+        }
+        return parsed;
+      }
+      return undefined;
+    } catch {
+      return undefined;
+    }
   };
 
   const handleSave = async () => {
@@ -94,12 +132,22 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
         return;
       }
 
+      // Validate custom headers JSON if provided
+      if (data.customHeaders.trim()) {
+        const parsed = parseCustomHeaders(data.customHeaders);
+        if (!parsed) {
+          alert("Custom headers must be valid JSON object (e.g. {\"key\": \"value\"})");
+          return;
+        }
+      }
+
       const config: MCPServerConfig = {
         id: editingServer()?.id || crypto.randomUUID(),
         name: data.name,
         server_url: data.serverUrl,
         oauth_client_id: data.oauthClientId.trim() || undefined,
         oauth_client_secret: data.oauthClientSecret.trim() || undefined,
+        custom_headers: parseCustomHeaders(data.customHeaders),
         enabled: editingServer()?.enabled ?? true,
         created_at: editingServer()?.created_at || new Date().toISOString(),
         updated_at: new Date().toISOString(),
@@ -111,6 +159,26 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
     } catch (err) {
       console.error("Failed to save server:", err);
       alert("Failed to save server configuration");
+    }
+  };
+
+  const handleAddPreset = async (preset: typeof PRESET_SERVERS[0]) => {
+    try {
+      const config: MCPServerConfig = {
+        id: crypto.randomUUID(),
+        name: preset.name,
+        server_url: preset.server_url,
+        custom_headers: preset.custom_headers,
+        enabled: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      await saveMCPServer(config);
+      await refreshData();
+    } catch (err) {
+      console.error("Failed to add preset server:", err);
+      alert("Failed to add preset server");
     }
   };
 
@@ -138,7 +206,11 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
       await refreshData();
     } catch (err) {
       console.error("Failed to toggle connection:", err);
-      alert("Failed to connect/disconnect server");
+      if (!isTauri()) {
+        alert("MCP server connections require the desktop app. Servers can be configured here for use in the desktop version.");
+      } else {
+        alert("Failed to connect/disconnect server");
+      }
     }
   };
 
@@ -169,6 +241,28 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
       </div>
 
       <div class="mcp-settings-content">
+        {/* Quick Add Presets */}
+        <Show when={availablePresets().length > 0}>
+          <div class="presets-section">
+            <h3>Quick Add</h3>
+            <div class="presets-grid">
+              <For each={availablePresets()}>
+                {(preset) => (
+                  <div class="preset-card">
+                    <div class="preset-info">
+                      <h4>{preset.name}</h4>
+                      <p>{preset.description}</p>
+                    </div>
+                    <button class="preset-add-btn" onClick={() => handleAddPreset(preset)}>
+                      + Add
+                    </button>
+                  </div>
+                )}
+              </For>
+            </div>
+          </div>
+        </Show>
+
         {showAddForm() && (
           <div class="add-form">
             <h3>{editingServer() ? "Edit Server" : "Add MCP Server"}</h3>
@@ -196,6 +290,17 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
             <details class="advanced-settings">
               <summary>Advanced settings</summary>
               <div class="advanced-content">
+                <div class="form-group">
+                  <label>Custom Headers (JSON)</label>
+                  <textarea
+                    value={formData().customHeaders}
+                    onInput={(e) => setFormData(prev => ({ ...prev, customHeaders: e.currentTarget.value }))}
+                    placeholder={'{"x-api-key": "your-key"}'}
+                    rows={3}
+                  />
+                  <small>JSON object with header name-value pairs sent with every request</small>
+                </div>
+
                 <div class="form-group">
                   <label>OAuth Client ID (optional)</label>
                   <input
@@ -269,6 +374,12 @@ const MCPSettings: Component<MCPSettingsProps> = (props) => {
                       {server.oauth_client_id && (
                         <div class="detail-row">
                           <strong>OAuth:</strong> Configured
+                        </div>
+                      )}
+
+                      {server.custom_headers && Object.keys(server.custom_headers).length > 0 && (
+                        <div class="detail-row">
+                          <strong>Custom Headers:</strong> {Object.keys(server.custom_headers).join(", ")}
                         </div>
                       )}
 

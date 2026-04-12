@@ -55,7 +55,7 @@ impl MCPManager {
         };
 
         // Create HTTP MCP client
-        let mut http_client = HttpMcpClient::new(config.server_url.clone(), oauth_token);
+        let mut http_client = HttpMcpClient::new(config.server_url.clone(), oauth_token, config.custom_headers.clone());
 
         // Initialize the connection
         match http_client.initialize().await {
